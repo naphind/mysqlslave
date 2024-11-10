@@ -1,0 +1,79 @@
+---
+
+- name: Start MySql services once data directory is configured
+  hosts: mysql-slave2
+  vars_files: 
+    - vars/slave.yml
+  remote_user: root
+  tasks:
+
+     - name: Register Host to Foreman
+       shell: wget https://172.16.1.200/pub/katello-ca-consumer-latest.noarch.rpm --no-check-certificate ; rpm -ivh katello-ca-consumer-latest.noarch.rpm ; subscription-manager register --org="uidai" --activationkey="ceph" --force
+
+     - name: Removing Old packages for MySQL if any
+       shell: yum remove mariadb* -y
+ 
+     - name: Installing mysql packages
+       yum:
+        name: mysql-community-server
+        state: present
+
+     - name: Start Mysql Service
+       systemd:
+         name: mysqld
+         state: started
+         enabled: yes
+     - name: Pause
+       pause:
+         seconds: 30
+ 
+     - name: Create hosts file
+       template:
+         src: templates/hosts-slave
+         dest: /etc/hosts
+ 
+     - name: Create MySql Configuration
+       template:
+         src: templates/mycnf-slave
+         dest: /etc/my.cnf
+
+    - name: Configuring my.cnf for slave
+      lineinfile:
+        path: /etc/my.cnf
+        state: present
+        regexp: 'server-id'
+        line: 'server-id = {{ server-id }}'
+
+     - name: Extract Mysql Temp password
+       shell: grep 'temporary password' /var/log/mysqld.log | awk -F " " '{print $13}' > /tmp/pass
+
+     - name: Register password into a variable
+       shell: cat /tmp/pass
+       register: my_sql_pass
+
+     - debug:
+         msg: "{{ my_sql_pass.stdout }}"
+
+     - name: update mysql root password for all root accounts from local servers
+       shell: mysql --user root --password="{{ my_sql_pass.stdout }}" --connect-expired-password --execute="ALTER USER 'root'@'localhost' IDENTIFIED BY 'Sky@wipro@123'";
+
+     - name: Collecting master status in a file
+       shell: mysql -h 172.16.3.100 --user masteruser --password='Sky@wipro@123' --execute="show master status\G;" > /tmp/mysql
+
+##### Here We will Add MySQL Dump related Configurations #####
+
+
+          
+     - name: Copy Script
+       copy:
+         src: scripts/slave_conf.sh
+         dest: /tmp/slave_conf.sh
+         owner: root
+         group: root
+         mode: 0777
+
+     - name: Configure Slave
+       shell: sh /tmp/slave_conf.sh 
+         
+     - name:  Restart MtSQL Service
+       shell: systemctl restart mysqld
